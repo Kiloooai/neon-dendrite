@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Dendrite</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+            color: #0ff;
+            text-shadow: 0 0 5px #0ff;
+            cursor: crosshair;
+        }
+        canvas { display: block; }
+        .controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid rgba(0,255,255,0.3);
+            backdrop-filter: blur(5px);
+            z-index: 100;
+            user-select: none;
+            width: 220px;
+        }
+        .controls h2 {
+            margin-bottom: 12px;
+            font-size: 16px;
+            color: #ff0;
+            text-shadow: 0 0 10px #ff0;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        .control-group label {
+            display: block;
+            font-size: 10px;
+            color: #f0f;
+            margin-bottom: 4px;
+        }
+        input[type="range"] {
+            width: 100%;
+            accent-color: #0ff;
+        }
+        .value-display {
+            float: right;
+            color: #fff;
+            font-weight: bold;
+            font-size: 11px;
+        }
+        .buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        button {
+            flex: 1;
+            padding: 8px;
+            background: transparent;
+            border: 1px solid #0ff;
+            color: #0ff;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+        button:hover {
+            background: rgba(0,255,255,0.1);
+            box-shadow: 0 0 10px rgba(0,255,255,0.3);
+        }
+        .stats {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: #0f0;
+            text-shadow: 0 0 8px #0f0;
+            font-size: 12px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(0,255,0,0.3);
+        }
+        .instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #888;
+            font-size: 12px;
+            text-align: center;
+            max-width: 500px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <div class="controls">
+        <h2>⚡ NEON DENDRITE</h2>
+
+        <div class="control-group">
+            <label>Max Walkers <span class="value-display" id="maxWalkersVal">200</span></label>
+            <input type="range" id="maxWalkers" min="10" max="1000" value="200">
+        </div>
+
+        <div class="control-group">
+            <label>Spawn Rate <span class="value-display" id="spawnRateVal">3</span></label>
+            <input type="range" id="spawnRate" min="1" max="20" value="3">
+        </div>
+
+        <div class="control-group">
+            <label>Stickiness <span class="value-display" id="stickinessVal">0.90</span></label>
+            <input type="range" id="stickiness" min="0.1" max="1" step="0.05" value="0.9">
+        </div>
+
+        <div class="control-group">
+            <label>Step Size <span class="value-display" id="stepSizeVal">2</span></label>
+            <input type="range" id="stepSize" min="1" max="8" value="2">
+        </div>
+
+        <div class="control-group">
+            <label>Color Speed <span class="value-display" id="colorSpeedVal">0.5</span></label>
+            <input type="range" id="colorSpeed" min="0" max="2" step="0.1" value="0.5">
+        </div>
+
+        <div class="buttons">
+            <button id="pauseBtn">Pause</button>
+            <button id="clearBtn">Clear</button>
+        </div>
+    </div>
+
+    <div class="stats">
+        <div>Cluster: <span id="clusterSize">0</span></div>
+        <div>Walkers: <span id="activeWalkers">0</span></div>
+        <div>FPS: <span id="fps">60</span></div>
+    </div>
+
+    <div class="instructions">
+        Diffusion-limited aggregation: particles randomly walk until they stick, forming fractal branches. Click anywhere to add a new seed cluster. Watch dendrites compete and merge.
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Offscreen canvas for persistent cluster drawing
+        const clusterCanvas = document.createElement('canvas');
+        const clusterCtx = clusterCanvas.getContext('2d');
+
+        // Controls
+        const maxWalkersSlider = document.getElementById('maxWalkers');
+        const spawnRateSlider = document.getElementById('spawnRate');
+        const stickinessSlider = document.getElementById('stickiness');
+        const stepSizeSlider = document.getElementById('stepSize');
+        const colorSpeedSlider = document.getElementById('colorSpeed');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const clearBtn = document.getElementById('clearBtn');
+
+        let width, height;
+        let running = true;
+        let frameCount = 0;
+        let lastFpsTime = 0;
+        let hueCycle = 0;
+        let frame = 0;
+
+        // Simulation state
+        const clusterPoints = []; // {x, y}
+        let walkers = [];
+        let grid = null; // Uint8Array for occupancy
+        const cellSize = 3; // grid cell size in pixels
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            clusterCanvas.width = width;
+            clusterCanvas.height = height;
+            // Reset simulation on resize
+            resetSim();
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        function initGrid() {
+            const cols = Math.ceil(width / cellSize);
+            const rows = Math.ceil(height / cellSize);
+            grid = new Uint8Array(cols * rows);
+        }
+
+        function gridIndex(x, y) {
+            const col = Math.floor(x / cellSize);
+            const row = Math.floor(y / cellSize);
+            if (col < 0 || row < 0 || col >= grid.width || row >= grid.height) return -1;
+            return row * grid.width + col;
+        }
+
+        function markOccupied(x, y) {
+            const idx = gridIndex(x, y);
+            if (idx >= 0) grid[idx] = 1;
+        }
+
+        function isOccupied(x, y) {
+            const idx = gridIndex(x, y);
+            return idx >= 0 && grid[idx] === 1;
+        }
+
+        function resetSim() {
+            clusterPoints.length = 0;
+            walkers = [];
+            clusterCtx.clearRect(0, 0, width, height);
+            initGrid();
+            // Add initial seed at center
+            addSeed(width/2, height/2);
+        }
+
+        function addSeed(x, y) {
+            clusterPoints.push({x, y, hue: frame * parseFloat(colorSpeedSlider.value)});
+            markOccupied(x, y);
+            // Draw onto clusterCanvas with glow
+            const hue = (clusterPoints.length * 2 + hueCycle) % 360;
+            clusterCtx.beginPath();
+            clusterCtx.arc(x, y, cellSize, 0, Math.PI*2);
+            clusterCtx.fillStyle = `hsl(${hue}, 100%, 60%)`;
+            clusterCtx.shadowBlur = 10;
+            clusterCtx.shadowColor = clusterCtx.fillStyle;
+            clusterCtx.fill();
+            clusterCtx.shadowBlur = 0;
+        }
+
+        function spawnWalker() {
+            if (walkers.length >= parseInt(maxWalkersSlider.value)) return;
+            // Choose a random cluster point as spawn anchor (or use all cluster bounding)
+            let x, y;
+            if (clusterPoints.length === 0) {
+                x = width/2; y = height/2;
+            } else {
+                // Pick random cluster point
+                const p = clusterPoints[Math.floor(Math.random() * clusterPoints.length)];
+                // Spawn at random angle, distance = 100 + random(50)
+                const angle = Math.random() * Math.PI * 2;
+                const dist = 100 + Math.random() * 50;
+                x = p.x + Math.cos(angle) * dist;
+                y = p.y + Math.sin(angle) * dist;
+            }
+            // Ensure within canvas, else wrap or skip
+            if (x < 0 || x >= width || y < 0 || y >= height) return;
+            walkers.push({x, y});
+        }
+
+        function updateWalkers() {
+            const step = parseInt(stepSizeSlider.value);
+            const stickProb = parseFloat(stickinessSlider.value);
+
+            for (let i = walkers.length - 1; i >= 0; i--) {
+                const w = walkers[i];
+                // Random direction step
+                const angle = Math.random() * Math.PI * 2;
+                w.x += Math.cos(angle) * step;
+                w.y += Math.sin(angle) * step;
+
+                // Boundary check: remove if out of bounds
+                if (w.x < 0 || w.x >= width || w.y < 0 || w.y >= height) {
+                    walkers.splice(i, 1);
+                    continue;
+                }
+
+                // Check occupancy
+                if (isOccupied(w.x, w.y)) {
+                    // Stick with probability
+                    if (Math.random() < stickProb) {
+                        const hue = (frame * parseFloat(colorSpeedSlider.value) + (w.x/width)*120) % 360;
+                        clusterPoints.push({x: w.x, y: w.y, hue});
+                        markOccupied(w.x, w.y);
+                        // Draw onto clusterCanvas
+                        clusterCtx.beginPath();
+                        clusterCtx.arc(w.x, w.y, cellSize, 0, Math.PI*2);
+                        clusterCtx.fillStyle = `hsl(${hue}, 100%, 60%)`;
+                        clusterCtx.shadowBlur = 8;
+                        clusterCtx.shadowColor = clusterCtx.fillStyle;
+                        clusterCtx.fill();
+                        clusterCtx.shadowBlur = 0;
+                        walkers.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        function drawWalkers() {
+            // Draw walkers as small bright dots
+            ctx.fillStyle = '#fff';
+            ctx.shadowBlur = 6;
+            ctx.shadowColor = '#fff';
+            for (const w of walkers) {
+                ctx.beginPath();
+                ctx.arc(w.x, w.y, 1.5, 0, Math.PI*2);
+                ctx.fill();
+            }
+            ctx.shadowBlur = 0;
+        }
+
+        function animate(timestamp) {
+            if (!running) return;
+
+            const delta = timestamp - lastTime || 16;
+            lastTime = timestamp;
+
+            frameCount++;
+            if (timestamp - lastFpsTime >= 1000) {
+                document.getElementById('fps').textContent = frameCount;
+                frameCount = 0;
+                lastFpsTime = timestamp;
+            }
+
+            frame++;
+            hueCycle = (hueCycle + parseFloat(colorSpeedSlider.value) * 0.05) % 360;
+
+            // Clear main canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+
+            // Draw persistent cluster from offscreen canvas
+            ctx.drawImage(clusterCanvas, 0, 0);
+
+            // Spawn walkers
+            const spawnCount = parseInt(spawnRateSlider.value);
+            for (let i = 0; i < spawnCount; i++) spawnWalker();
+
+            // Update and draw walkers
+            updateWalkers();
+            drawWalkers();
+
+            // Stats
+            document.getElementById('clusterSize').textContent = clusterPoints.length;
+            document.getElementById('activeWalkers').textContent = walkers.length;
+
+            requestAnimationFrame(animate);
+        }
+        let lastTime = 0;
+
+        // Interactions
+        canvas.addEventListener('click', (e) => {
+            addSeed(e.clientX, e.clientY);
+        });
+
+        // UI updates
+        function updateDisplays() {
+            document.getElementById('maxWalkersVal').textContent = maxWalkersSlider.value;
+            document.getElementById('spawnRateVal').textContent = spawnRateSlider.value;
+            document.getElementById('stickinessVal').textContent = stickinessSlider.value;
+            document.getElementById('stepSizeVal').textContent = stepSizeSlider.value;
+            document.getElementById('colorSpeedVal').textContent = colorSpeedSlider.value;
+        }
+
+        const sliders = [maxWalkersSlider, spawnRateSlider, stickinessSlider, stepSizeSlider, colorSpeedSlider];
+        sliders.forEach(s => s.addEventListener('input', updateDisplays));
+
+        pauseBtn.addEventListener('click', () => {
+            running = !running;
+            pauseBtn.textContent = running ? "Pause" : "Resume";
+            if (running) animate(0);
+        });
+
+        clearBtn.addEventListener('click', () => {
+            resetSim();
+        });
+
+        // Init
+        updateDisplays();
+        animate(0);
+    </script>
+</body>
+</html>
